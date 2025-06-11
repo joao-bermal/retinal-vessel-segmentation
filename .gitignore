@@ -12,4 +12,3 @@ __pycache__/
 *.jpg
 drive_converted/
 predicted_masks/
-models/

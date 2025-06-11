@@ -3,85 +3,69 @@ import cv2
 import torch
 import numpy as np
 from unet import UNet
-from sklearn.metrics import accuracy_score, jaccard_score, f1_score
 import matplotlib.pyplot as plt
 
+# Configurações
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model_path = "models/unet_drive_vessels.pth"
-IMAGE_SIZE = (512, 512)
+model_path = "models/unet_drive.pth"
+IMAGE_SIZE = (608, 576)
 
-input_dir = 'drive_converted/test/images'
-mask_dir = 'drive_converted/test/masks'
-output_dir = 'predicted_masks/drive_test'
+# Diretórios ajustados
+input_dir = r'data/1-Hypertensive Classification/1-Images/1-Training Set'
+output_dir = r'predicted_masks/hypertensive'
 os.makedirs(output_dir, exist_ok=True)
 
+# Carrega modelo treinado
 model = UNet().to(device)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 
-# Para armazenar métricas globais
-all_accuracies = []
-all_ious = []
-all_f1s = []
-
+# Processamento
 for filename in os.listdir(input_dir):
     if not filename.endswith('.png'):
         continue
 
+    print(f"🖼️ Processando: {filename}")
+
     img_path = os.path.join(input_dir, filename)
-    img_num = filename.split('_')[0]
-    mask_path = os.path.join(mask_dir, f"{img_num}.png")
-
-    if not os.path.exists(mask_path):
-        print(f"⚠️ Máscara {mask_path} não encontrada.")
-        continue
-
     image = cv2.imread(img_path)
     if image is None:
+        print(f"⚠️ Imagem não carregada: {img_path}")
         continue
 
-    # Pré-processamento
+    # === Pré-processamento igual ao do treino ===
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     green = image[:, :, 1]
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(green)
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
-    preprocessed = cv2.merge([blurred, blurred, blurred])
+    image[:, :, 1] = clahe.apply(green)
 
-    resized_img = cv2.resize(preprocessed, IMAGE_SIZE).astype('float32') / 255.0
-    tensor = torch.tensor(resized_img.transpose(2, 0, 1)).unsqueeze(0).to(device)
+    image_resized = cv2.resize(image, IMAGE_SIZE)
+    image_tensor = image_resized.astype(np.float32) / 255.0
+    image_tensor = torch.tensor(image_tensor.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        output = model(tensor)
-        pred = output.squeeze().cpu().numpy()
-        bin_mask = (pred > 0.5).astype('uint8')
+        output = model(image_tensor)
+        prob = torch.sigmoid(output)
+        pred = prob.squeeze().cpu().numpy()
 
-    # Ground truth
-    gt = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-    gt_resized = cv2.resize(gt, IMAGE_SIZE)
-    gt_bin = (gt_resized > 127).astype('uint8')
+    print(f"{filename}: min={pred.min():.4f}, max={pred.max():.4f}")
 
-    # Salvar predição
+    # === Visualização ===
+    plt.figure(figsize=(12, 4))
+
+    plt.subplot(1, 3, 1)
+    plt.imshow(image_resized)
+    plt.title("Imagem (CLAHE + Resize)")
+    plt.axis('off')
+
+    plt.subplot(1, 3, 2)
+    plt.imshow(pred, cmap='gray')
+    plt.title("Predição (raw)")
+    plt.axis('off')
+
+    bin_mask = (pred > 0.5).astype(np.uint8) * 255
+    
+
+    # Salva predição binária
     save_path = os.path.join(output_dir, filename)
-    cv2.imwrite(save_path, bin_mask * 255)
-
-    # Métricas
-    y_true = gt_bin.flatten()
-    y_pred = bin_mask.flatten()
-
-    acc = accuracy_score(y_true, y_pred)
-    iou = jaccard_score(y_true, y_pred, average='binary')
-    f1 = f1_score(y_true, y_pred, average='binary')
-
-    all_accuracies.append(acc)
-    all_ious.append(iou)
-    all_f1s.append(f1)
-
-# Média das métricas
-mean_acc = np.mean(all_accuracies)
-mean_iou = np.mean(all_ious)
-mean_f1 = np.mean(all_f1s)
-
-print(f"\n✅ Resultado Final nas Imagens de Teste:")
-print(f"Acurácia média: {mean_acc:.4f}")
-print(f"IoU média: {mean_iou:.4f}")
-print(f"F1-score média: {mean_f1:.4f}")
+    cv2.imwrite(save_path, bin_mask)

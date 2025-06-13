@@ -3,8 +3,7 @@ from torch.utils.data import DataLoader
 from torch import nn, optim
 from sklearn.model_selection import train_test_split
 import os
-import glob
-from dataset import RetinalDataset
+from dataset import RetinalDataset, load_drive_paths, load_stare_paths
 from unet import UNet
 from losses import dice_loss
 
@@ -12,24 +11,27 @@ from losses import dice_loss
 batch_size = 4
 epochs = 150
 learning_rate = 5e-4
-model_path = 'models/unet_drive.pth'
+model_path = 'models/unet_drive_stare.pth'
 
-# Dados
-images_dir = 'data/drive/training/images'
-masks_dir = 'data/drive/training/1st_manual'
-image_paths = sorted(glob.glob(os.path.join(images_dir, '*.tif')))
-mask_paths = sorted(glob.glob(os.path.join(masks_dir, '*.gif')))
+# Carrega os caminhos dos dois datasets
+drive_imgs, drive_masks = load_drive_paths()
+stare_imgs, stare_masks = load_stare_paths()
 
-# Split treino/validação
+# Junta tudo
+all_imgs = drive_imgs + stare_imgs
+all_masks = drive_masks + stare_masks
+
+# Divide treino e validação
 train_imgs, val_imgs, train_masks, val_masks = train_test_split(
-    image_paths, mask_paths, test_size=0.2, random_state=42)
+    all_imgs, all_masks, test_size=0.2, random_state=42)
 
+# Datasets e loaders
 train_set = RetinalDataset(train_imgs, train_masks, augment=True)
 val_set   = RetinalDataset(val_imgs, val_masks, augment=False)
 train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
 val_loader   = DataLoader(val_set, batch_size=1, shuffle=False)
 
-# Modelo
+# Modelo e otimizador
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = UNet().to(device)
 bce = nn.BCEWithLogitsLoss()
@@ -48,7 +50,7 @@ def evaluate(model, loader):
     return sum(dice_scores) / len(dice_scores)
 
 # Treinamento
-print("🏋️ Iniciando treinamento da U-Net...")
+print("🏋️ Iniciando treinamento com DRIVE + STARE...")
 for epoch in range(epochs):
     model.train()
     epoch_loss = 0
@@ -67,9 +69,9 @@ for epoch in range(epochs):
 
     if (epoch + 1) % 10 == 0:
         os.makedirs('models', exist_ok=True)
-        torch.save(model.state_dict(), f'models/unet_epoch{epoch+1}.pth')
+        torch.save(model.state_dict(), f'models/unet_combined_epoch{epoch+1}.pth')
 
-# Salvar modelo final
+# Modelo final
 os.makedirs('models', exist_ok=True)
 torch.save(model.state_dict(), model_path)
 print(f"✅ Modelo salvo em: {model_path}")

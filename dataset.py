@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 from torch.utils.data import Dataset
@@ -10,9 +11,8 @@ class RetinalDataset(Dataset):
         self.image_paths = image_paths
         self.mask_paths = mask_paths
         self.augment = augment
-        self.height, self.width = 576, 608  # tamanho compatível com U-Net e DRIVE
+        self.height, self.width = 576, 608  # compatível com U-Net e avaliação
 
-        # Augmentations para treino
         self.train_transform = A.Compose([
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
@@ -24,7 +24,6 @@ class RetinalDataset(Dataset):
             ToTensorV2()
         ])
 
-        # Apenas resize + normalize
         self.base_transform = A.Compose([
             A.Resize(self.height, self.width),
             A.Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0)),
@@ -35,32 +34,62 @@ class RetinalDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # === Imagem .tif ===
         image_path = self.image_paths[idx]
+        mask_path = self.mask_paths[idx]
+
         image = cv2.imread(image_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # CLAHE no canal verde
         green = image[:, :, 1]
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         image[:, :, 1] = clahe.apply(green)
 
-        # === Máscara .gif ===
-        mask_path = self.mask_paths[idx]
         mask = Image.open(mask_path).convert("L")
         mask = np.array(mask)
-        mask = (mask > 15).astype(np.uint8) * 255  # binariza
-        mask = mask.astype(np.uint8)
+        mask = (mask > 15).astype(np.uint8) * 255
 
-        # === Transforms ===
         transform = self.train_transform if self.augment else self.base_transform
         transformed = transform(image=image, mask=mask)
         image = transformed["image"]
-        mask = transformed["mask"]
+        mask = transformed["mask"].float() / 255.0
 
-        # Normaliza máscara para [0, 1] e adiciona canal
-        mask = mask.float() / 255.0
         if mask.ndim == 2:
             mask = mask.unsqueeze(0)
 
         return image, mask
+
+def load_drive_paths(base_path="data/drive/training"):
+    images = []
+    masks = []
+
+    img_dir = os.path.join(base_path, "images")
+    mask_dir = os.path.join(base_path, "1st_manual")
+
+    for fname in os.listdir(img_dir):
+        if fname.endswith(".tif"):
+            img_path = os.path.join(img_dir, fname)
+            mask_name = fname.replace("_training.tif", "_manual1.gif")
+            mask_path = os.path.join(mask_dir, mask_name)
+
+            if os.path.exists(mask_path):
+                images.append(img_path)
+                masks.append(mask_path)
+    return images, masks
+
+def load_stare_paths(base_path="data/stare"):
+    images = []
+    masks = []
+
+    img_dir = os.path.join(base_path, "stare-images")
+    mask_dir = os.path.join(base_path, "labels-ah")  # ou labels-vk
+
+    for fname in os.listdir(mask_dir):
+        if fname.endswith(".ppm") or fname.endswith(".png"):
+            mask_path = os.path.join(mask_dir, fname)
+            img_name = fname.replace(".ah.ppm", ".ppm").replace(".vk.ppm", ".ppm")
+            img_path = os.path.join(img_dir, img_name)
+
+            if os.path.exists(img_path):
+                images.append(img_path)
+                masks.append(mask_path)
+    return images, masks
